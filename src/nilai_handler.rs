@@ -3,15 +3,12 @@ use super::utils;
 use super::delegate;
 use futures::channel::mpsc;
 use futures::prelude::*;
-use futures::SinkExt;
-use futures::StreamExt;
 use futures_timer::Delay;
-use log::{info, trace, warn};
+use log::{info, warn};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
-use futures_timer::Interval;
 use futures::channel::oneshot;
 
 // TODO: sync the state for name change. 
@@ -111,7 +108,9 @@ impl NilaiHandler {
 
             if let Ok(opt) = self.closer.try_recv(){
                 if let Some(_) = opt{
-                    sender.send(1);
+                    if let Err(_) = sender.send(1){
+                        warn!("error while closing probe handler");
+                    }
                     break;
                 }
             }

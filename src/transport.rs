@@ -3,7 +3,7 @@ use failure::Error;
 use futures::channel::mpsc;
 use futures::SinkExt;
 use futures::StreamExt;
-use log::{info, trace, warn};
+use log::{info, warn};
 use num_enum::TryFromPrimitive;
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};

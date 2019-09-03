@@ -1,6 +1,4 @@
-use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 use std::net::SocketAddr;
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {

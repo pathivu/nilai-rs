@@ -2,7 +2,6 @@ use super::delegate;
 use super::nilai_handler;
 use super::transport;
 use super::closer;
-use super::types::UdpMessage;
 use failure::Error;
 use future::join3;
 use futures::channel::mpsc;
@@ -153,8 +152,9 @@ impl NilaiBuilder {
         };
         let peers = self.peers.clone();
         let closer = closer::NilaiCloser{
-            handler_closer: handler_sender,
-            packet_closer: udp_sender,
+            handler_signal: handler_closer_signal,
+            transport_receiver_signal: tansport_receiver_closer_signal,
+            transport_sender_signal:tansport_sender_closer_signal,
         };
         std::thread::spawn(move || {
             runtime::raw::enter(runtime::native::Native, async move {
