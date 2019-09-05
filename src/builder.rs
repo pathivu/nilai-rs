@@ -1,17 +1,17 @@
+use super::closer;
 use super::delegate;
 use super::nilai_handler;
 use super::transport;
-use super::closer;
 use failure::Error;
 use future::join3;
-use futures::executor::block_on;
 use futures::channel::mpsc;
+use futures::channel::oneshot;
+use futures::executor::block_on;
 use futures::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use futures::channel::oneshot;
 use tokio::runtime::Runtime;
 /// NilaiBuilder is used to configure and execute the nilai
 pub struct NilaiBuilder {
@@ -137,7 +137,7 @@ impl NilaiBuilder {
             dead_delegate: dead_delegate,
             closer: closer,
         };
-    
+
         let (tansport_receiver_closer_signal, closer) = oneshot::channel();
         let mut transport_receiver = transport::TransportReceiver {
             handler_ch: handler_sender.clone(),
@@ -155,15 +155,16 @@ impl NilaiBuilder {
         let mut yo = Runtime::new().unwrap();
         yo.block_on(async move {
             join3(
-                    handler.listen(peers),
-                    transport_receiver.listen(),
-                    transport_sender.listen(),
-                ).await;
+                handler.listen(peers),
+                transport_receiver.listen(),
+                transport_sender.listen(),
+            )
+            .await;
         });
-        let closer = closer::NilaiCloser{
+        let closer = closer::NilaiCloser {
             handler_signal: handler_closer_signal,
             transport_receiver_signal: tansport_receiver_closer_signal,
-            transport_sender_signal:tansport_sender_closer_signal,
+            transport_sender_signal: tansport_sender_closer_signal,
             // handler: handler,
         };
         Ok(closer)

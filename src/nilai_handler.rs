@@ -1,17 +1,18 @@
+use super::delegate;
 use super::types::*;
 use super::utils;
-use super::delegate;
 use futures::channel::mpsc;
+use futures::channel::oneshot;
 use futures::prelude::*;
 use futures_timer::Delay;
 use log::{info, warn};
+use runtime::native::Native;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
-use futures::channel::oneshot;
 
-// TODO: sync the state for name change. 
+// TODO: sync the state for name change.
 // not important right now. But if we needed we'll do it in future.
 
 /// NilaiHandler is responsible for handling the state. Basically, it is the heart of the nilai.
@@ -42,7 +43,7 @@ pub(crate) struct NilaiHandler {
 
 impl NilaiHandler {
     /// init  initialize the current node and sends statesync to all the node.
-    async fn init(&mut self, peers: Vec<SocketAddr>,mut  closer: oneshot::Receiver<i32>) {
+    async fn init(&mut self, peers: Vec<SocketAddr>, mut closer: oneshot::Receiver<i32>) {
         // initialize local state.
         self.nodes.insert(
             self.addr.clone(),
@@ -71,25 +72,28 @@ impl NilaiHandler {
         // Initialize the probing.
         let mut sender = self.timeout_sender.clone();
         let probe_interval = self.probe_interval;
-        tokio::spawn(async move{
-            loop{
-                     if let Ok(opt) = closer.try_recv(){
-                if let Some(_) = opt{
-                    break;
+        tokio::spawn(async move {
+            loop {
+                if let Ok(opt) = closer.try_recv() {
+                    if let Some(_) = opt {
+                        break;
+                    }
                 }
-            }
-                match Delay::new(probe_interval).await{
+                match Delay::new(probe_interval).await {
                     Ok(_) => {
-                        if let Err(e) = sender.send(UdpMessage{
-                            peer: None,
-                            msg: Message::Probe
-                        }).await {
+                        if let Err(e) = sender
+                            .send(UdpMessage {
+                                peer: None,
+                                msg: Message::Probe,
+                            })
+                            .await
+                        {
                             // need to understand how channel work in rust. will this block?
-                            // or we only get here only if the channel is closed. 
+                            // or we only get here only if the channel is closed.
                             warn!("I think channel is closed. so breaking the probe {}", e);
                             break;
                         }
-                    },
+                    }
                     Err(e) => {
                         warn!("something went wrong on probing future {}", e);
                     }
@@ -107,16 +111,15 @@ impl NilaiHandler {
 
         // listen for incoming messages.
         loop {
-
-            if let Ok(opt) = self.closer.try_recv(){
-                if let Some(_) = opt{
-                    if let Err(_) = sender.send(1){
+            if let Ok(opt) = self.closer.try_recv() {
+                if let Some(_) = opt {
+                    if let Err(_) = sender.send(1) {
                         warn!("error while closing probe handler");
                     }
                     break;
                 }
             }
-           
+
             match self.msg_rcv.next().await {
                 Some(msg) => {
                     self.handle_msg(msg.peer, msg.msg).await;
@@ -154,7 +157,10 @@ impl NilaiHandler {
                 self.handle_indirect_ping(msg).await;
             }
             Message::SuspectMsg(msg) => {
-                info!("got suspect message for the node {} from {}",msg.node, msg.from);
+                info!(
+                    "got suspect message for the node {} from {}",
+                    msg.node, msg.from
+                );
                 self.handle_suspect(msg).await;
             }
             Message::SuspectMsgTimeout(msg) => {
@@ -171,7 +177,7 @@ impl NilaiHandler {
             }
             Message::StateSync(msg) => {
                 info!("got state sync request from {} {}", msg.name, msg.addr);
-                // It'll update the local state from the message. 
+                // It'll update the local state from the message.
                 self.handle_state_sync(msg).await;
             }
             Message::StateSyncRes(msg) => {
@@ -181,66 +187,73 @@ impl NilaiHandler {
         }
     }
 
-    fn handle_state_sync_res(&mut self, msg: Alive){
-        if let Some(node) = self.nodes.get_mut(&msg.addr){
-            if node.incarnation > msg.incarnation{
+    fn handle_state_sync_res(&mut self, msg: Alive) {
+        if let Some(node) = self.nodes.get_mut(&msg.addr) {
+            if node.incarnation > msg.incarnation {
                 // ignore if it is old message
-                return
+                return;
             }
             // update the local state
             node.incarnation = msg.incarnation;
             node.state = State::Alive;
             node.name = msg.name;
-            return
+            return;
         }
         // This is unknown node so updating my local state.
         self.node_ids.push(msg.addr.clone());
-        self.nodes.insert(msg.addr.clone(), Node{
-            addr: msg.addr,
-            incarnation: msg.incarnation,
-            name: msg.name,
-            state: State::Alive,
-        });
+        self.nodes.insert(
+            msg.addr.clone(),
+            Node {
+                addr: msg.addr,
+                incarnation: msg.incarnation,
+                name: msg.name,
+                state: State::Alive,
+            },
+        );
     }
 
     async fn handle_state_sync(&mut self, msg: Alive) {
         if let Some(node) = self.nodes.get(&msg.addr) {
-           if node.incarnation != msg.incarnation{
-            // so this node is restarted so we'll send dead message to the node. so that it can
-            // update it's local state and gossip it around the cluster.
-            
-            if node.state == State::Dead || node.state == State::Suspect{
-                // let the node that it is dead. so that it can refute and update it's state and 
-                // gossip alive state.
-                self.send_msg(UdpMessage{
-                    peer: Some(msg.addr.parse().unwrap()),
-                    msg: Message::Dead(Dead{
-                        from: self.addr.clone(),
-                        node: msg.addr.clone(),
-                        incarnation: node.incarnation,
-                    })
-                }).await; 
-            }
+            if node.incarnation != msg.incarnation {
+                // so this node is restarted so we'll send dead message to the node. so that it can
+                // update it's local state and gossip it around the cluster.
 
-           }
+                if node.state == State::Dead || node.state == State::Suspect {
+                    // let the node that it is dead. so that it can refute and update it's state and
+                    // gossip alive state.
+                    self.send_msg(UdpMessage {
+                        peer: Some(msg.addr.parse().unwrap()),
+                        msg: Message::Dead(Dead {
+                            from: self.addr.clone(),
+                            node: msg.addr.clone(),
+                            incarnation: node.incarnation,
+                        }),
+                    })
+                    .await;
+                }
+            }
         } else {
             self.node_ids.push(msg.addr.clone());
-            self.nodes.insert(msg.addr.clone(), Node{
-                addr: self.addr.clone(),
-                state: State::Alive,
-                incarnation: msg.incarnation,
-                name: msg.name,
-            });
+            self.nodes.insert(
+                msg.addr.clone(),
+                Node {
+                    addr: self.addr.clone(),
+                    state: State::Alive,
+                    incarnation: msg.incarnation,
+                    name: msg.name,
+                },
+            );
         }
         // any ways we'll send our local state to the peer to update itself.
-        self.send_msg(UdpMessage{
+        self.send_msg(UdpMessage {
             peer: Some(msg.addr.parse().unwrap()),
-            msg: Message::StateSyncRes(Alive{
+            msg: Message::StateSyncRes(Alive {
                 addr: self.addr.clone(),
                 incarnation: self.local_incarnation,
                 name: self.name.clone(),
-            })
-        }).await;
+            }),
+        })
+        .await;
     }
 
     async fn handle_dead(&mut self, msg: Dead) {
@@ -272,6 +285,7 @@ impl NilaiHandler {
     }
 
     async fn handle_alive(&mut self, msg: Alive) {
+        print!("yo alive");
         info!("got alive msg from: {}", msg.name);
         let local_state = self.nodes.get_mut(&msg.addr);
         match local_state {
@@ -300,7 +314,6 @@ impl NilaiHandler {
                 //     return;
                 // }
 
-
                 // we'll just ignore if the state matches with the local state
                 // so we don't do any thing. So that gossip will get avoided.
                 // since we're going any queueing. This will work for us time
@@ -316,8 +329,8 @@ impl NilaiHandler {
                 // let's update the local state and gossip it.
                 local_state.incarnation = msg.incarnation;
                 // send notification to delegate if any.
-                if let Some(delegate) = &self.alive_delegate{
-                    delegate(Node{
+                if let Some(delegate) = &self.alive_delegate {
+                    delegate(Node {
                         addr: msg.addr.clone(),
                         name: msg.name.clone(),
                         incarnation: msg.incarnation,
@@ -363,8 +376,8 @@ impl NilaiHandler {
                     incarnation: msg.incarnation,
                 };
                 // send notification to delegate if any.
-                if let Some(delegate) = &self.dead_delegate{
-                    delegate(Node{
+                if let Some(delegate) = &self.dead_delegate {
+                    delegate(Node {
                         addr: suspect_node.addr.to_string(),
                         name: suspect_node.name.to_string(),
                         incarnation: suspect_node.incarnation,
@@ -405,7 +418,7 @@ impl NilaiHandler {
             // old suspect message so just ignore it.
             return;
         }
-        if msg.node == self.name {
+        if msg.node == self.addr {
             // It's me who is been suspected.
             // so refute it.
             self.refute(msg.incarnation).await;
@@ -505,24 +518,26 @@ impl NilaiHandler {
             node_id: suspect_node_addr,
             incarnation: suspect_incarnation,
         });
-        self.spawn_timeout_msg(UdpMessage {
-            msg: suspect_timeout,
-            peer: None,
-        }, Duration::from_millis(self.probe_timeout.as_secs() * self.suspicious_multiplier))
+        self.spawn_timeout_msg(
+            UdpMessage {
+                msg: suspect_timeout,
+                peer: None,
+            },
+            Duration::from_millis(self.probe_timeout.as_secs() * self.suspicious_multiplier),
+        )
         .await;
     }
 
     async fn handle_ack(&mut self, seq_no: u32) {
         // first you check wether it is indirect ping or our ping.
         // if it is indirect ping send ack res to from node.
-        // other wise clear ourself.
+        // other wise clear ouetrself.
         // removing the checker so that when probe timeout come.
         // we know that ack have come so no need to send indirect ping.
         match self.indirect_ack_checker.get(&seq_no) {
             Some(indirect_msg) => {
                 let from = indirect_msg.from.parse().unwrap();
-                self.send_ack(from, indirect_msg.seq_no)
-                    .await;
+                self.send_ack(from, indirect_msg.seq_no).await;
             }
             None => {
                 // here you don't care. You just try to remove
@@ -671,5 +686,356 @@ impl NilaiHandler {
 
     fn increment_seq_no(&mut self) {
         self.seq_no = self.seq_no + 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+    use env_logger;
+    use futures::executor::block_on;
+    use std::sync::{Once, ONCE_INIT};
+    use std::thread;
+
+    fn get_mock_nilai(
+        recv: mpsc::Receiver<UdpMessage>,
+        send_udp: mpsc::Sender<UdpMessage>,
+        send: mpsc::Sender<UdpMessage>,
+    ) -> NilaiHandler {
+        let mut nl = NilaiHandler {
+            msg_rcv: recv,
+            msg_sender: send_udp,
+            nodes: HashMap::default(),
+            seq_no: 0,
+            node_ids: Vec::default(),
+            ack_checker: HashMap::default(),
+            probe_id: 0,
+            timeout_sender: send,
+            name: String::from("yo"),
+            indirect_ack_checker: HashMap::default(),
+            local_incarnation: 0,
+            addr: String::from("127.0.0.0:8000"),
+        };
+        nl.nodes.insert(
+            String::from("127.0.0.0:8000"),
+            Node {
+                addr: String::from("127.0.0.0:8000"),
+                name: String::from("yo"),
+                state: State::Alive,
+                incarnation: 0,
+            },
+        );
+        nl.node_ids.push(String::from("127.0.0.0:8000"));
+        return nl;
+    }
+    #[runtime::test(Native)]
+    async fn test_handle_alive() {
+        env_logger::init();
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+        })
+        .await;
+        // self and alive node. So, it is two.
+        assert_eq!(nl.nodes.len(), 2);
+
+        // checking suspect refute for the suspect.
+        let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+        node_2.state = State::Suspect;
+        //  sending alive with less incarnation number so that
+        // it won't update the state
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 1,
+        })
+        .await;
+        let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+        assert_eq!(node_2.state, State::Suspect);
+
+        // sending with higher incarnation number so that it'll mark
+        // the state as alive
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 3,
+        })
+        .await;
+        let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+        assert_eq!(node_2.state, State::Alive);
+    }
+
+    #[runtime::test(Native)]
+    async fn test_handle_dead() {
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+        })
+        .await;
+        assert_eq!(nl.nodes.len(), 2);
+
+        // dead with lower incarnation number so that
+        // it won't considered as dead.
+        nl.handle_dead(Dead {
+            from: String::from("127.0.0.0:8000"),
+            node: String::from("127.1.1.1:8000"),
+            incarnation: 1,
+        })
+        .await;
+        let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+        assert_eq!(node_2.state, State::Alive);
+
+        // dead with high incarnation number so that
+        // it will considered as dead.
+        nl.handle_dead(Dead {
+            from: String::from("127.0.0.0:8000"),
+            node: String::from("127.1.1.1:8000"),
+            incarnation: 3,
+        })
+        .await;
+        let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+        assert_eq!(node_2.state, State::Dead);
+        // node is restarted so it is sending alive
+        // with 0 incarnation now Nilai should send dead message.
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 0,
+        })
+        .await;
+        let udp_msg = recv_udp.try_next().unwrap();
+        match udp_msg.unwrap().msg {
+            Message::Dead(_) => {
+                // pass the test.
+            }
+            _ => {
+                panic!("dead message expected");
+            }
+        }
+    }
+    #[runtime::test(Native)]
+    async fn test_handle_timeout() {
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+        })
+        .await;
+        assert_eq!(nl.nodes.len(), 2);
+        nl.handle_probe().await;
+        // now probe should send ping message
+        let _ = recv_udp.try_next().unwrap().unwrap();
+        nl.handle_ack(nl.seq_no - 1).await;
+        // now there should not be ack checker
+        assert_eq!(nl.ack_checker.len(), 0);
+        assert_eq!(
+            nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap().state,
+            State::Alive
+        );
+        // add one more node.
+        nl.handle_alive(Alive {
+            name: String::from("node 3"),
+            addr: String::from("127.1.1.3:8000"),
+            incarnation: 2,
+        })
+        .await;
+        nl.handle_probe().await;
+        // now probe should send ping message
+        let _ = recv_udp.try_next().unwrap().unwrap();
+        nl.handle_timeout(nl.seq_no - 1).await;
+        assert_eq!(nl.ack_checker.len(), 1);
+        // need some smart way to test it.
+        // rustaceans please help me here.
+        let mut indirect_ping_exist = false;
+        let mut indirect_ping_node = String::from("");
+        loop {
+            match recv_udp.try_next() {
+                Ok(msg) => match msg {
+                    Some(udp_msg) => match udp_msg.msg {
+                        Message::IndirectPingMsg(msg) => {
+                            indirect_ping_node = msg.to;
+                            indirect_ping_exist = true;
+                        }
+                        _ => {
+                            continue;
+                        }
+                    },
+                    None => {
+                        break;
+                    }
+                },
+                _ => {
+                    break;
+                }
+            }
+        }
+        assert_eq!(indirect_ping_exist, true);
+        assert_eq!(nl.ack_checker.len(), 1);
+        // so there no indirect ack and we'll do indirect ping timeout.
+        nl.handle_indirect_ping_timeout(nl.seq_no - 1).await;
+        assert_eq!(
+            nl.nodes.get(&indirect_ping_node).unwrap().state,
+            State::Suspect
+        );
+        nl.handle_suspect_timeout(SuspectTimeout {
+            incarnation: 0,
+            node_id: indirect_ping_node.clone(),
+        })
+        .await;
+        // lesser incarnation number means it'll ignore.
+        assert_eq!(
+            nl.nodes.get(&indirect_ping_node).unwrap().state,
+            State::Suspect
+        );
+
+        nl.handle_suspect_timeout(SuspectTimeout {
+            incarnation: 2,
+            node_id: indirect_ping_node.clone(),
+        })
+        .await;
+        // not refuted, so it'll mark the node as dead.
+        assert_eq!(
+            nl.nodes.get(&indirect_ping_node).unwrap().state,
+            State::Dead
+        );
+    }
+    #[runtime::test(Native)]
+    async fn test_suspect_msg() {
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+        })
+        .await;
+        assert_eq!(nl.nodes.len(), 2);
+
+        // send suspect message with less incarnation number.
+        nl.handle_suspect(Suspect {
+            node: String::from("127.1.1.1:8000"),
+            incarnation: 1,
+            from: String::from("127.1.1.0:8000"),
+        })
+        .await;
+
+        // It should not mark the node as suspect, because suspect has less incarnation.
+        assert_eq!(
+            nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap().state,
+            State::Alive
+        );
+
+        // send suspect message with same incarnation number.
+        nl.handle_suspect(Suspect {
+            node: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+            from: String::from("127.1.1.0:8000"),
+        })
+        .await;
+
+        // It should mark the node as suspect, because suspect has same incarnation.
+        assert_eq!(
+            nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap().state,
+            State::Suspect
+        );
+
+        // now we send a refute message.
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 3,
+        })
+        .await;
+        // after refute it should be alive.
+        assert_eq!(
+            nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap().state,
+            State::Alive
+        );
+
+        // send suspect message with higher incarnation number.
+        nl.handle_suspect(Suspect {
+            node: String::from("127.1.1.1:8000"),
+            incarnation: 4,
+            from: String::from("127.1.1.0:8000"),
+        })
+        .await;
+
+        // It should mark the node as suspect, because suspect has msg higher incarnation.
+        assert_eq!(
+            nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap().state,
+            State::Suspect
+        );
+    }
+
+    #[runtime::test(Native)]
+    async fn test_indirect_ping() {
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 2,
+        })
+        .await;
+        nl.handle_alive(Alive {
+            name: String::from("node 3"),
+            addr: String::from("127.3.3.3:8000"),
+            incarnation: 2,
+        })
+        .await;
+        assert_eq!(nl.nodes.len(), 3);
+
+        // send indirect ping from node 3 to node 2.
+        nl.handle_indirect_ping(IndirectPing {
+            seq_no: 5,
+            to: String::from("127.1.1.1:8000"),
+            from: String::from("127.3.3.3:8000"),
+        })
+        .await;
+
+        assert_eq!(nl.indirect_ack_checker.len(), 1);
+
+        // Now you got indirect ack and nl send ack with seq_no 1.
+        nl.handle_ack(nl.seq_no - 1).await;
+
+        let mut ack_exist = false;
+        let mut ack_seq_no = 0;
+        loop {
+            match recv_udp.try_next() {
+                Ok(msg) => match msg {
+                    Some(udp_msg) => match udp_msg.msg {
+                        Message::Ack(msg) => {
+                            ack_exist = true;
+                            ack_seq_no = msg.seq_no;
+                        }
+                        _ => {
+                            continue;
+                        }
+                    },
+                    None => {
+                        break;
+                    }
+                },
+                _ => {
+                    break;
+                }
+            }
+        }
+        assert!(ack_exist);
+        assert_eq!(ack_seq_no, 5);
     }
 }

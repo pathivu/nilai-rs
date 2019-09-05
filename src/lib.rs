@@ -1,9 +1,9 @@
 pub mod builder;
+pub mod closer;
 pub mod delegate;
 mod nilai_handler;
 mod transport;
 pub mod types;
-pub mod closer;
 mod utils;
 
 #[cfg(test)]

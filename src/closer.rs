@@ -1,32 +1,16 @@
+use futures::channel::mpsc;
+use futures::SinkExt;
 use futures::channel::oneshot;
-use failure::Error;
-use failure::err_msg;
-use std::thread::JoinHandle;
+use super::types;
 // NilaiCloser close all the channels which let to close the nilai handler.
 pub struct NilaiCloser {
-    pub (crate) handler_signal: oneshot::Sender<i32>,
-    pub (crate) transport_receiver_signal: oneshot::Sender<i32>,
-    pub (crate) transport_sender_signal: oneshot::Sender<i32>,
-   //  pub (crate) handler: JoinHandle<()>,
+    pub (crate) handler_signal: oneshot::Receiver<i32>,
+    pub (crate) transport_receiver_signal: oneshot::Receiver<i32>,
+    pub (crate) transport_sender_signal: oneshot::Receiver<i32>,
 }
 
 impl NilaiCloser  {
-    pub fn close(self)->Result<(), Error>{
-        if let Err(_) = self.handler_signal.send(1) {
-           return Err(err_msg("unable to close the nilai handler."))
-        }
-        if let Err(_) = self.transport_receiver_signal.send(1) {
-           return Err(err_msg("unable to close transport recevier."))
-        } 
-        if let Err(_) = self.transport_sender_signal.send(1) {
-           return Err(err_msg("unable to close transport sender."))
-        }
-        // TODO: use golang waitgroup kind of thingy to wait to close
-        // all the futures. 
-        return Ok(());
-    }
-
-    pub fn join_handle(self) {
-      //  self.handler.join();
+    pub fn close(&mut self){
+        // don't ha
     }
 }

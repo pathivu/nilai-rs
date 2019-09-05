@@ -1,6 +1,7 @@
 use super::types::*;
 use failure::Error;
 use futures::channel::mpsc;
+use futures::channel::oneshot;
 use futures::SinkExt;
 use futures::StreamExt;
 use log::{info, warn};
@@ -10,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::net::SocketAddr;
 use tokio::net::udp::split::{UdpSocketRecvHalf, UdpSocketSendHalf};
-use futures::channel::oneshot;
 
 // decode_msg is used to decode the buf into message.
 fn decode_msg(buf: &Vec<u8>) -> Result<Message, Error> {
@@ -33,6 +33,7 @@ fn decode_msg(buf: &Vec<u8>) -> Result<Message, Error> {
             return Ok(Message::SuspectMsg(msg));
         }
         MessageType::AliveMsg => {
+            print!("got alive message");
             let msg: Alive = Deserialize::deserialize(&mut deserializer)?;
             return Ok(Message::Alive(msg));
         }
@@ -70,6 +71,7 @@ fn encode_msg(msg: Message, buf: &mut Vec<u8>) -> Result<(), Error> {
             msg.serialize(&mut Serializer::new(buf))?;
         }
         Message::Alive(msg) => {
+            print!("sent alive message");
             buf.push(MessageType::AliveMsg as u8);
             msg.serialize(&mut Serializer::new(buf))?;
         }
@@ -103,14 +105,12 @@ impl TransportReceiver {
     pub(crate) async fn listen(&mut self) {
         let mut buf = vec![0; 1024];
         loop {
-
-            if let Ok(opt) = self.closer.try_recv(){
-                if let Some(_) = opt{
+            if let Ok(opt) = self.closer.try_recv() {
+                if let Some(_) = opt {
                     break;
                 }
             }
 
-            buf.clear();
             match self.udp_socket_receiver.recv_from(&mut buf).await {
                 Ok((read_bytes, from)) => {
                     info!("{} bytes received", read_bytes);
@@ -171,8 +171,8 @@ impl TransportSender {
     pub(crate) async fn listen(&mut self) {
         let mut buf = vec![0; 1024];
         loop {
-            if let Ok(opt) = self.closer.try_recv(){
-                if let Some(_) = opt{
+            if let Ok(opt) = self.closer.try_recv() {
+                if let Some(_) = opt {
                     break;
                 }
             }
@@ -183,11 +183,19 @@ impl TransportSender {
                     let peer = udp_msg.peer.unwrap();
                     match encode_msg(udp_msg.msg, &mut buf) {
                         Ok(_) => {
-                            if let Err(e) = self.udp_socket_sender.send_to(&buf[..buf.len()], &peer).await {
-                                warn!("error while sending udp message {} {}", e, peer);
-                                continue
+                            match self
+                                .udp_socket_sender
+                                .send_to(&buf[..buf.len()], &peer)
+                                .await
+                            {
+                                Err(e) => {
+                                    warn!("error while sending udp message {} {}", e, peer);
+                                    continue;
+                                }
+                                Ok(bytes_sent) => {
+                                    info!("bytes sent {}", bytes_sent);
+                                }
                             }
-                            info!("bytes sent {}", buf.len());
                         }
                         Err(e) => {
                             warn!("unable to decode the message {} ", e);
