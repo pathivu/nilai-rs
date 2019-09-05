@@ -114,6 +114,9 @@ impl TransportReceiver {
             match self.udp_socket_receiver.recv_from(&mut buf).await {
                 Ok((read_bytes, from)) => {
                     info!("{} bytes received", read_bytes);
+                    if read_bytes == 0 {
+                        continue;
+                    }
                     match decode_msg(&buf) {
                         Ok(msg) => {
                             self.send_msg(from, msg).await;
@@ -180,9 +183,11 @@ impl TransportSender {
                     let peer = udp_msg.peer.unwrap();
                     match encode_msg(udp_msg.msg, &mut buf) {
                         Ok(_) => {
-                            if let Err(e) = self.udp_socket_sender.send_to(&buf, &peer).await {
+                            if let Err(e) = self.udp_socket_sender.send_to(&buf[..buf.len()], &peer).await {
                                 warn!("error while sending udp message {} {}", e, peer);
+                                continue
                             }
+                            info!("bytes sent {}", buf.len());
                         }
                         Err(e) => {
                             warn!("unable to decode the message {} ", e);

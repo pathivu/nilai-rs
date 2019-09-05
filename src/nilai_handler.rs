@@ -71,7 +71,7 @@ impl NilaiHandler {
         // Initialize the probing.
         let mut sender = self.timeout_sender.clone();
         let probe_interval = self.probe_interval;
-        runtime::spawn(async move{
+        tokio::spawn(async move{
             loop{
                      if let Ok(opt) = closer.try_recv(){
                 if let Some(_) = opt{
@@ -99,6 +99,8 @@ impl NilaiHandler {
     }
 
     pub(crate) async fn listen(&mut self, peers: Vec<SocketAddr>) {
+        println!("nilai started listening");
+        info!("yo");
         // initialize the handlers and send state sync to all the peers.
         let (sender, closer) = oneshot::channel();
         self.init(peers, closer).await;
@@ -657,7 +659,7 @@ impl NilaiHandler {
 
     async fn spawn_timeout_msg(&mut self, msg: UdpMessage, duration: Duration) {
         let mut sender = self.timeout_sender.clone();
-        runtime::spawn(async move {
+        tokio::spawn(async move {
             Delay::new(duration).await;
             sender.send(msg).await;
         });

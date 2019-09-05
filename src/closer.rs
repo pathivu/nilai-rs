@@ -1,11 +1,13 @@
 use futures::channel::oneshot;
 use failure::Error;
 use failure::err_msg;
+use std::thread::JoinHandle;
 // NilaiCloser close all the channels which let to close the nilai handler.
 pub struct NilaiCloser {
     pub (crate) handler_signal: oneshot::Sender<i32>,
     pub (crate) transport_receiver_signal: oneshot::Sender<i32>,
     pub (crate) transport_sender_signal: oneshot::Sender<i32>,
+   //  pub (crate) handler: JoinHandle<()>,
 }
 
 impl NilaiCloser  {
@@ -22,5 +24,9 @@ impl NilaiCloser  {
         // TODO: use golang waitgroup kind of thingy to wait to close
         // all the futures. 
         return Ok(());
+    }
+
+    pub fn join_handle(self) {
+      //  self.handler.join();
     }
 }
