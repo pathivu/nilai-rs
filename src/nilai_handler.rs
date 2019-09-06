@@ -693,7 +693,6 @@ impl NilaiHandler {
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
-    use env_logger;
     use futures::executor::block_on;
     use std::sync::{Once, ONCE_INIT};
     use std::thread;
@@ -703,6 +702,7 @@ mod tests {
         send_udp: mpsc::Sender<UdpMessage>,
         send: mpsc::Sender<UdpMessage>,
     ) -> NilaiHandler {
+        let (handler_closer_signal, closer) = oneshot::channel();
         let mut nl = NilaiHandler {
             msg_rcv: recv,
             msg_sender: send_udp,
@@ -716,6 +716,14 @@ mod tests {
             indirect_ack_checker: HashMap::default(),
             local_incarnation: 0,
             addr: String::from("127.0.0.0:8000"),
+            alive_delegate: None,
+            dead_delegate: None,
+            indirect_checks: 2,
+            gossip_nodes: 2,
+            probe_timeout: Duration::from_millis(200),
+            probe_interval: Duration::from_millis(200),
+            suspicious_multiplier: 2,
+            closer: closer,
         };
         nl.nodes.insert(
             String::from("127.0.0.0:8000"),
@@ -731,7 +739,6 @@ mod tests {
     }
     #[runtime::test(Native)]
     async fn test_handle_alive() {
-        env_logger::init();
         let (mut send, recv) = mpsc::channel(100);
         let (send_udp, recv_udp) = mpsc::channel(100);
         let mut nl = get_mock_nilai(recv, send_udp, send.clone());
