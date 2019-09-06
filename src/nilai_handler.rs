@@ -213,31 +213,31 @@ impl NilaiHandler {
     }
 
     async fn handle_state_sync(&mut self, msg: Alive) {
+        println!("yo sync");
         if let Some(node) = self.nodes.get(&msg.addr) {
-            if node.incarnation != msg.incarnation {
-                // so this node is restarted so we'll send dead message to the node. so that it can
-                // update it's local state and gossip it around the cluster.
+            println!("sync state {:?}", node);
+            // so this node is restarted so we'll send dead message to the node. so that it can
+            // update it's local state and gossip it around the cluster.
 
-                if node.state == State::Dead || node.state == State::Suspect {
-                    // let the node that it is dead. so that it can refute and update it's state and
-                    // gossip alive state.
-                    self.send_msg(UdpMessage {
-                        peer: Some(msg.addr.parse().unwrap()),
-                        msg: Message::Dead(Dead {
-                            from: self.addr.clone(),
-                            node: msg.addr.clone(),
-                            incarnation: node.incarnation,
-                        }),
-                    })
-                    .await;
-                }
+            if node.state == State::Dead || node.state == State::Suspect {
+                // let the node that it is dead. so that it can refute and update it's state and
+                // gossip alive state.
+                self.send_msg(UdpMessage {
+                    peer: Some(msg.addr.parse().unwrap()),
+                    msg: Message::Dead(Dead {
+                        from: self.addr.clone(),
+                        node: msg.addr.clone(),
+                        incarnation: node.incarnation,
+                    }),
+                })
+                .await;
             }
         } else {
             self.node_ids.push(msg.addr.clone());
             self.nodes.insert(
                 msg.addr.clone(),
                 Node {
-                    addr: self.addr.clone(),
+                    addr: msg.addr.clone(),
                     state: State::Alive,
                     incarnation: msg.incarnation,
                     name: msg.name,
@@ -261,7 +261,7 @@ impl NilaiHandler {
         match dead_node {
             Some(dead_node) => {
                 if dead_node.incarnation > msg.incarnation {
-                    // old incarnation number. So, ignore it.
+                    // old incarnation num.clone()ber. So, ignore it.
                     return;
                 }
 
@@ -285,8 +285,6 @@ impl NilaiHandler {
     }
 
     async fn handle_alive(&mut self, msg: Alive) {
-        print!("yo alive");
-        info!("got alive msg from: {}", msg.name);
         let local_state = self.nodes.get_mut(&msg.addr);
         match local_state {
             Some(local_state) => {
@@ -478,9 +476,11 @@ impl NilaiHandler {
             // we received ack so simply return.
             return;
         }
+
         let s_n_id = s_n_id.unwrap().to_string();
         info!("got indirect ping timeout {}", s_n_id);
-
+        println!("indirect ping timeout node {}", s_n_id);
+        println!("nodes {:?}", self.nodes);
         self.suspect_node(&s_n_id).await;
     }
 
@@ -493,6 +493,7 @@ impl NilaiHandler {
             // we need some method for leaving the cluster.
             return;
         }
+        println!("suspect node {:?}", suspect_node);
         let suspect_node = suspect_node.unwrap();
         suspect_node.state = State::Suspect;
         let suspect_msg = Suspect {
@@ -577,13 +578,9 @@ impl NilaiHandler {
             if self.nodes.len() == 1 {
                 return;
             }
-
             if self.probe_id >= self.nodes.len() {
                 self.probe_id = 0;
-                // sanity check since we're unwraping.
-                if self.nodes.len() == 1 {
-                    return;
-                }
+                return;
             }
             let node_id = self.node_ids.get(self.probe_id).unwrap();
             // sanity check
@@ -718,8 +715,8 @@ mod tests {
             addr: String::from("127.0.0.0:8000"),
             alive_delegate: None,
             dead_delegate: None,
-            indirect_checks: 2,
-            gossip_nodes: 2,
+            indirect_checks: 0,
+            gossip_nodes: 0,
             probe_timeout: Duration::from_millis(200),
             probe_interval: Duration::from_millis(200),
             suspicious_multiplier: 2,
@@ -767,6 +764,7 @@ mod tests {
 
         // sending with higher incarnation number so that it'll mark
         // the state as alive
+        nl.gossip_nodes = 1;
         nl.handle_alive(Alive {
             name: String::from("node 2"),
             addr: String::from("127.1.1.1:8000"),
@@ -775,6 +773,7 @@ mod tests {
         .await;
         let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
         assert_eq!(node_2.state, State::Alive);
+        // s
     }
 
     #[runtime::test(Native)]
@@ -811,8 +810,24 @@ mod tests {
         .await;
         let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
         assert_eq!(node_2.state, State::Dead);
+        // node is restarted so it is sending alive
+        // with 0 incarnation now Nilai should send dead message.
+        nl.handle_alive(Alive {
+            name: String::from("node 2"),
+            addr: String::from("127.1.1.1:8000"),
+            incarnation: 0,
+        })
+        .await;
+        let udp_msg = recv_udp.try_next().unwrap();
+        match udp_msg.unwrap().msg {
+            Message::Dead(_) => {
+                // pass the test.
+            }
+            _ => {
+                panic!("dead message expected");
+            }
+        }
     }
-
     #[runtime::test(Native)]
     async fn test_handle_timeout() {
         let (mut send, recv) = mpsc::channel(100);

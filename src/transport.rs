@@ -33,7 +33,6 @@ fn decode_msg(buf: &Vec<u8>) -> Result<Message, Error> {
             return Ok(Message::SuspectMsg(msg));
         }
         MessageType::AliveMsg => {
-            print!("got alive message");
             let msg: Alive = Deserialize::deserialize(&mut deserializer)?;
             return Ok(Message::Alive(msg));
         }
@@ -42,6 +41,7 @@ fn decode_msg(buf: &Vec<u8>) -> Result<Message, Error> {
             return Ok(Message::Dead(msg));
         }
         MessageType::StateSync => {
+            println!("got udp state sync");
             let msg: Alive = Deserialize::deserialize(&mut deserializer)?;
             return Ok(Message::StateSync(msg));
         }
@@ -71,7 +71,6 @@ fn encode_msg(msg: Message, buf: &mut Vec<u8>) -> Result<(), Error> {
             msg.serialize(&mut Serializer::new(buf))?;
         }
         Message::Alive(msg) => {
-            print!("sent alive message");
             buf.push(MessageType::AliveMsg as u8);
             msg.serialize(&mut Serializer::new(buf))?;
         }
@@ -80,6 +79,7 @@ fn encode_msg(msg: Message, buf: &mut Vec<u8>) -> Result<(), Error> {
             msg.serialize(&mut Serializer::new(buf))?;
         }
         Message::StateSync(msg) => {
+            println!("sending state sync");
             buf.push(MessageType::StateSync as u8);
             msg.serialize(&mut Serializer::new(buf))?;
         }
@@ -113,6 +113,7 @@ impl TransportReceiver {
 
             match self.udp_socket_receiver.recv_from(&mut buf).await {
                 Ok((read_bytes, from)) => {
+                    println!("{} bytes received", read_bytes);
                     info!("{} bytes received", read_bytes);
                     if read_bytes == 0 {
                         continue;
@@ -122,6 +123,7 @@ impl TransportReceiver {
                             self.send_msg(from, msg).await;
                         }
                         Err(err) => {
+                            println!("unable to decode");
                             warn!("unable to decode the message {}", err);
                         }
                     }
