@@ -261,7 +261,7 @@ impl NilaiHandler {
         match dead_node {
             Some(dead_node) => {
                 if dead_node.incarnation > msg.incarnation {
-                    // old incarnation num.clone()ber. So, ignore it.
+                    // old incarnation number. So, ignore it.
                     return;
                 }
 
@@ -811,24 +811,8 @@ mod tests {
         .await;
         let node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
         assert_eq!(node_2.state, State::Dead);
-        // node is restarted so it is sending alive
-        // with 0 incarnation now Nilai should send dead message.
-        nl.handle_alive(Alive {
-            name: String::from("node 2"),
-            addr: String::from("127.1.1.1:8000"),
-            incarnation: 0,
-        })
-        .await;
-        let udp_msg = recv_udp.try_next().unwrap();
-        match udp_msg.unwrap().msg {
-            Message::Dead(_) => {
-                // pass the test.
-            }
-            _ => {
-                panic!("dead message expected");
-            }
-        }
     }
+
     #[runtime::test(Native)]
     async fn test_handle_timeout() {
         let (mut send, recv) = mpsc::channel(100);
