@@ -1058,6 +1058,63 @@ mod tests {
             assert_eq!(ack_seq_no, 5);
         });
     }
+    #[test]
+    fn test_handle_state_sync() {
+         let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            nl.handle_state_sync(Alive{
+                addr: String::from("127.1.1.1:8000"),
+                name: String::from("node 2"),
+                incarnation: 0,
+            }).await;
+            
+            // It has to be updated in the local node details.
+            assert_eq!(nl.node_ids.len(), 2);
+            assert_eq!(nl.node_ids[1], String::from("127.1.1.1:8000"));
 
-    fn test_handle_state_sync() {}
+            let mut node_2 = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+
+            assert_eq!(node_2.name, String::from("node 2"));
+            assert_eq!(node_2.addr, String::from("127.1.1.1:8000"));
+            assert_eq!(node_2.incarnation, 0);
+            assert_eq!(node_2.state, State::Alive);
+
+            // let's mark this node as dead and send state sync.
+            node_2.state = State::Dead;
+            nl.handle_state_sync(Alive{
+                addr: String::from("127.1.1.1:8000"),
+                name: String::from("node 2"),
+                incarnation: 0,
+            }).await;
+            let mut dead_msg_exist = false;
+            // expect dead msg from the nilai.
+            loop {
+                match recv_udp.try_next() {
+                    Ok(msg) => match msg {
+                        Some(udp_msg) => match udp_msg.msg {
+                            Message::Dead(msg) => {
+                                dead_msg_exist = true;
+                                assert_eq!(msg.incarnation, 0);
+                                assert_eq!(msg.node,String::from("127.1.1.1:8000"));
+                                assert_eq!(msg.from, nl.addr);
+                            }
+                            _ => {
+                                continue;
+                            }
+                        },
+                        None => {
+                            break;
+                        }
+                    },
+                    _ => {
+                        break;
+                    }
+                }
+            }
+            assert!(dead_msg_exist);
+        });
+    }
 }
