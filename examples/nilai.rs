@@ -1,18 +1,25 @@
+use failure::Error;
 use nilai::builder;
 use nilai::types;
-use simplelog::*;
-fn main() {
-    CombinedLogger::init(vec![
-        TermLogger::new(LevelFilter::Warn, Config::default(), TerminalMode::Mixed).unwrap(),
-        TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap(),
-    ])
-    .unwrap();
+use std::thread;
+use std::time::Duration;
 
-    let nilai_builder = builder::NilaiBuilder::new("127.0.0.1:5001".parse().unwrap());
+fn do_main() -> Result<(), Error> {
+    let nilai_builder = builder::NilaiBuilder::new("127.0.0.1:5001".parse()?);
     let closer = nilai_builder
-        .alive_delegate(Box::new(|_: types::Node| panic!("new node joined")))
-        .execute()
-        .unwrap();
-    // nilai is runnning so block the current thread.
-    closer.join_handle();
+        .alive_delegate(Box::new(|_: types::Node| println!("new node joined")))
+        .execute()?;
+    // nilai is running so block the current thread.
+    thread::sleep(Duration::from_secs(5));
+    closer.stop();
+    Ok(())
+}
+
+fn main() {
+    match do_main() {
+        Err(err) => {
+            println!("not able to run nilai handler {:?}", err);
+        }
+        _ => {}
+    }
 }

@@ -1,6 +1,8 @@
 use nilai::builder;
 use nilai::types;
 use simplelog::*;
+use std::thread;
+use std::time::Duration;
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(LevelFilter::Warn, Config::default(), TerminalMode::Mixed).unwrap(),
@@ -13,6 +15,6 @@ fn main() {
         .peers(vec!["127.0.0.1:5001".parse().unwrap()])
         .execute()
         .unwrap();
-    // nilai is runnning so block the current thread.
-    closer.join_handle();
+    // nilai is running so block the current thread.
+    thread::sleep(Duration::from_secs(20));
 }

@@ -107,13 +107,13 @@ impl TransportReceiver {
         loop {
             if let Ok(opt) = self.closer.try_recv() {
                 if let Some(_) = opt {
+                    info!("stopping transport receiver");
                     break;
                 }
             }
 
             match self.udp_socket_receiver.recv_from(&mut buf).await {
                 Ok((read_bytes, from)) => {
-                    println!("{} bytes received", read_bytes);
                     info!("{} bytes received", read_bytes);
                     if read_bytes == 0 {
                         continue;
@@ -175,6 +175,7 @@ impl TransportSender {
         loop {
             if let Ok(opt) = self.closer.try_recv() {
                 if let Some(_) = opt {
+                    info!("stopping transport sender");
                     break;
                 }
             }

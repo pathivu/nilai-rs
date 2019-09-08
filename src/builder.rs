@@ -10,6 +10,7 @@ use futures::executor::block_on;
 use futures::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::thread;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::runtime::Runtime;
@@ -152,20 +153,22 @@ impl NilaiBuilder {
             closer: closer,
         };
         let peers = self.peers.clone();
-        let mut yo = Runtime::new().unwrap();
-        yo.block_on(async move {
-            join3(
-                handler.listen(peers),
-                transport_receiver.listen(),
-                transport_sender.listen(),
-            )
-            .await;
+        // now start the state machine.
+        thread::spawn(move || {
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async move {
+                join3(
+                    handler.listen(peers),
+                    transport_receiver.listen(),
+                    transport_sender.listen(),
+                )
+                .await;
+            });
         });
         let closer = closer::NilaiCloser {
             handler_signal: handler_closer_signal,
             transport_receiver_signal: tansport_receiver_closer_signal,
             transport_sender_signal: tansport_sender_closer_signal,
-            // handler: handler,
         };
         Ok(closer)
     }

@@ -76,6 +76,7 @@ impl NilaiHandler {
             loop {
                 if let Ok(opt) = closer.try_recv() {
                     if let Some(_) = opt {
+                        info!("stopping probe");
                         break;
                     }
                 }
@@ -103,8 +104,7 @@ impl NilaiHandler {
     }
 
     pub(crate) async fn listen(&mut self, peers: Vec<SocketAddr>) {
-        println!("nilai started listening");
-        info!("yo");
+        info!("nilai started listening");
         // initialize the handlers and send state sync to all the peers.
         let (sender, closer) = oneshot::channel();
         self.init(peers, closer).await;
@@ -116,6 +116,7 @@ impl NilaiHandler {
                     if let Err(_) = sender.send(1) {
                         warn!("error while closing probe handler");
                     }
+                    info!("stoping nilai handler");
                     break;
                 }
             }
@@ -182,7 +183,7 @@ impl NilaiHandler {
             }
             Message::StateSyncRes(msg) => {
                 info!("got state sync response from {}", msg.addr);
-                self.handle_state_sync_res(msg);
+                self.handle_state_sync_res(msg).await;
             }
         }
     }
@@ -247,7 +248,7 @@ impl NilaiHandler {
         match dead_node {
             Some(dead_node) => {
                 if dead_node.incarnation > msg.incarnation {
-                    // old incarnation num.clone()ber. So, ignore it.
+                    // old incarnation number. So, ignore it.
                     return;
                 }
 
@@ -258,6 +259,7 @@ impl NilaiHandler {
                 }
                 // if the message is new then update and gossip.
                 if dead_node.state != State::Dead && dead_node.incarnation != msg.incarnation {
+                    info!("marking {} as a dead node", dead_node.addr);
                     dead_node.state = State::Dead;
                     dead_node.incarnation = msg.incarnation;
                     // send notification to delegate if any.
@@ -283,30 +285,6 @@ impl NilaiHandler {
         let local_state = self.nodes.get_mut(&msg.addr);
         match local_state {
             Some(local_state) => {
-                // I've decided to bootstrap with state sync.
-                // special case if node is bootstrapping or failed and restarted
-                // from a cluster. If the node incarnation number is zero and it is suspect
-                // or failed. we'll send dead message to the particular node so that it can
-                // get the state.
-                // if msg.incarnation == 0
-                //     && (local_state.state == State::Dead || local_state.state == State::Suspect)
-                // {
-                //     let peer = local_state.addr.parse().unwrap();
-                //     let incarnation = local_state.incarnation;
-                //     let from = self.addr.clone();
-                //     let node_id = local_state.addr.to_string();
-                //     self.send_msg(UdpMessage {
-                //         peer: Some(peer),
-                //         msg: Message::Dead(Dead {
-                //             from: from,
-                //             incarnation: incarnation,
-                //             node: node_id,
-                //         }),
-                //     })
-                //     .await;
-                //     return;
-                // }
-
                 // we'll just ignore if the state matches with the local state
                 // so we don't do any thing. So that gossip will get avoided.
                 // since we're going any queueing. This will work for us time
@@ -316,21 +294,23 @@ impl NilaiHandler {
                     // May be node crashed and restarted. So send a dead
                     return;
                 }
-
+                // we'll send notification only if the previous state is dead or suspect.
+                if local_state.state == State::Dead || local_state.state == State::Suspect {
+                    // send notification to delegate if any. cuz it's
+                    // restarted
+                    if let Some(delegate) = &self.alive_delegate {
+                        delegate(Node {
+                            addr: msg.addr.clone(),
+                            name: msg.name.clone(),
+                            incarnation: msg.incarnation,
+                            state: State::Alive,
+                        });
+                    }
+                }
                 // suspect may turn into alive on this update.
                 local_state.state = State::Alive;
                 // let's update the local state and gossip it.
                 local_state.incarnation = msg.incarnation;
-                // send notification to delegate if any. cuz it's
-                // restarted
-                if let Some(delegate) = &self.alive_delegate {
-                    delegate(Node {
-                        addr: msg.addr.clone(),
-                        name: msg.name.clone(),
-                        incarnation: msg.incarnation,
-                        state: State::Alive,
-                    });
-                }
                 self.gossip(Message::Alive(msg), self.gossip_nodes).await;
             }
             None => {
@@ -484,8 +464,6 @@ impl NilaiHandler {
 
         let s_n_id = s_n_id.unwrap().to_string();
         info!("got indirect ping timeout {}", s_n_id);
-        println!("indirect ping timeout node {}", s_n_id);
-        println!("nodes {:?}", self.nodes);
         self.suspect_node(&s_n_id).await;
     }
 
@@ -498,7 +476,6 @@ impl NilaiHandler {
             // we need some method for leaving the cluster.
             return;
         }
-        println!("suspect node {:?}", suspect_node);
         let suspect_node = suspect_node.unwrap();
         suspect_node.state = State::Suspect;
         let suspect_msg = Suspect {
@@ -695,9 +672,6 @@ impl NilaiHandler {
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
-    use futures::executor::block_on;
-    use std::sync::{Once, ONCE_INIT};
-    use std::thread;
     use tokio::runtime::Runtime;
 
     fn get_mock_nilai(
@@ -1060,17 +1034,18 @@ mod tests {
     }
     #[test]
     fn test_handle_state_sync() {
-         let (mut send, recv) = mpsc::channel(100);
+        let (mut send, recv) = mpsc::channel(100);
         let (send_udp, mut recv_udp) = mpsc::channel(100);
         let mut nl = get_mock_nilai(recv, send_udp, send.clone());
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            nl.handle_state_sync(Alive{
+            nl.handle_state_sync(Alive {
                 addr: String::from("127.1.1.1:8000"),
                 name: String::from("node 2"),
                 incarnation: 0,
-            }).await;
-            
+            })
+            .await;
+
             // It has to be updated in the local node details.
             assert_eq!(nl.node_ids.len(), 2);
             assert_eq!(nl.node_ids[1], String::from("127.1.1.1:8000"));
@@ -1084,11 +1059,12 @@ mod tests {
 
             // let's mark this node as dead and send state sync.
             node_2.state = State::Dead;
-            nl.handle_state_sync(Alive{
+            nl.handle_state_sync(Alive {
                 addr: String::from("127.1.1.1:8000"),
                 name: String::from("node 2"),
                 incarnation: 0,
-            }).await;
+            })
+            .await;
             let mut dead_msg_exist = false;
             // expect dead msg from the nilai.
             loop {
@@ -1098,7 +1074,7 @@ mod tests {
                             Message::Dead(msg) => {
                                 dead_msg_exist = true;
                                 assert_eq!(msg.incarnation, 0);
-                                assert_eq!(msg.node,String::from("127.1.1.1:8000"));
+                                assert_eq!(msg.node, String::from("127.1.1.1:8000"));
                                 assert_eq!(msg.from, nl.addr);
                             }
                             _ => {
@@ -1115,6 +1091,44 @@ mod tests {
                 }
             }
             assert!(dead_msg_exist);
+        });
+    }
+
+    #[test]
+    fn test_handle_state_sync_res() {
+        let (mut send, recv) = mpsc::channel(100);
+        let (send_udp, mut recv_udp) = mpsc::channel(100);
+        let mut nl = get_mock_nilai(recv, send_udp, send.clone());
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            nl.handle_state_sync_res(Alive {
+                addr: String::from("127.1.1.1:8000"),
+                name: String::from("node 2"),
+                incarnation: 0,
+            })
+            .await;
+            // The above should update the nl state.
+            assert_eq!(nl.nodes.len(), 2);
+            assert_eq!(nl.node_ids.len(), 2);
+            let alive_node = nl.nodes.get_mut(&String::from("127.1.1.1:8000")).unwrap();
+            assert_eq!(alive_node.state, State::Alive);
+            assert_eq!(alive_node.incarnation, 0);
+            assert_eq!(alive_node.name, String::from("node 2"));
+
+            // mark this node as dead.
+            alive_node.state = State::Dead;
+
+            // alive with higher incarnation.
+            nl.handle_state_sync_res(Alive {
+                addr: String::from("127.1.1.1:8000"),
+                name: String::from("node 2"),
+                incarnation: 1,
+            })
+            .await;
+
+            // let's check the state.
+            let alive_node = nl.nodes.get(&String::from("127.1.1.1:8000")).unwrap();
+            assert_eq!(alive_node.state, State::Alive);
         });
     }
 }
